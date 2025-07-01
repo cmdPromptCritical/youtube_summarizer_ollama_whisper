@@ -37,7 +37,7 @@ import argparse
 from pathlib import Path
 import config
 
-def check_dependencies(use_whisper=False, transcript_source="yt-dlp"):
+def check_dependencies(use_whisper=False, transcript_source="yt-dlp", ollama_model=config.OLLAMA_MODEL):
     """Check if required dependencies are available"""
     # Check if yt-dlp.exe exists for relevant sources
     if transcript_source == "yt-dlp" and not os.path.exists(config.YTDLP_PATH):
@@ -69,17 +69,44 @@ def check_dependencies(use_whisper=False, transcript_source="yt-dlp"):
         response = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=5)
         if response.status_code == 200:
             models = response.json().get("models", [])
-            if not any(config.OLLAMA_MODEL in model.get("name", "") for model in models):
-                print(f"Warning: {config.OLLAMA_MODEL} model not found. Available models:")
-                for model in models:
-                    print(f"  - {model.get('name', 'Unknown')}")
-                return False
+            model_names = [model.get("name") for model in models]
+
+            # Check if the desired model is available
+            if ollama_model not in model_names:
+                print(f"Warning: '{ollama_model}' model not found.")
+                
+                if not model_names:
+                    print("No Ollama models available. Please install a model.")
+                    return False
+
+                # Let the user choose from available models
+                print("Available models:")
+                for i, model_name in enumerate(model_names):
+                    print(f"  {i + 1}: {model_name}")
+                
+                try:
+                    choice = input(f"Select a model (1-{len(model_names)}) or press Enter to exit: ").strip()
+                    if not choice:
+                        print("No model selected. Exiting.")
+                        return False
+                    
+                    choice_idx = int(choice) - 1
+                    if 0 <= choice_idx < len(model_names):
+                        selected_model = model_names[choice_idx]
+                        print(f"Using model: {selected_model}")
+                        config.OLLAMA_MODEL = selected_model  # Update config
+                    else:
+                        print("Invalid selection. Exiting.")
+                        return False
+                except (ValueError, IndexError):
+                    print("Invalid input. Exiting.")
+                    return False
         else:
             print("Error: Could not connect to Ollama API")
             return False
     except requests.exceptions.RequestException:
         print(f"Error: Ollama is not running on {config.OLLAMA_URL}")
-        print(f"Please start Ollama and ensure {config.OLLAMA_MODEL} model is installed")
+        print(f"Please start Ollama and ensure a model is installed")
         return False
     
     return True
@@ -449,8 +476,13 @@ def main():
                         help=f'Whisper model size (default: {config.DEFAULT_WHISPER_MODEL}). Larger models are more accurate but slower.')
     parser.add_argument('--save-audio', action='store_true',
                         help='Save the downloaded audio file (only when using --use-whisper)')
+    parser.add_argument('--ollama-model', type=str, default=config.OLLAMA_MODEL,
+                        help=f'Ollama model to use for summarization (default: {config.OLLAMA_MODEL})')
     
     args = parser.parse_args()
+    
+    # Update config with command-line argument
+    config.OLLAMA_MODEL = args.ollama_model
     
     print("YouTube Transcript Summarizer")
     print("=" * 40)
@@ -461,7 +493,7 @@ def main():
         args.transcript_source = "whisper"
     
     # Check dependencies
-    if not check_dependencies(transcript_source=args.transcript_source):
+    if not check_dependencies(transcript_source=args.transcript_source, ollama_model=args.ollama_model):
         sys.exit(1)
     
     # Get YouTube URL
@@ -531,7 +563,7 @@ def main():
         print(summary)
         
         # Save summary to file
-        summary_filename = "summary.txt"
+        summary_filename = "summary.md"
         with open(summary_filename, "w", encoding="utf-8") as f:
             f.write(f"YouTube URL: {youtube_url}\n")
             f.write(f"Transcript Length: {len(transcript)} characters\n")

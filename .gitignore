@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 yt-dlp.exe
 summary.txt
+summary.md
