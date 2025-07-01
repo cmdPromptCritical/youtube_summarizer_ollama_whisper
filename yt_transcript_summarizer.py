@@ -35,13 +35,14 @@ import os
 import tempfile
 import argparse
 from pathlib import Path
+import config
 
 def check_dependencies(use_whisper=False, transcript_source="yt-dlp"):
     """Check if required dependencies are available"""
     # Check if yt-dlp.exe exists for relevant sources
-    if transcript_source == "yt-dlp" and not os.path.exists("yt-dlp.exe"):
-        print("Error: yt-dlp.exe not found in current directory")
-        print("Please download yt-dlp.exe from https://github.com/yt-dlp/yt-dlp/releases")
+    if transcript_source == "yt-dlp" and not os.path.exists(config.YTDLP_PATH):
+        print(f"Error: {config.YTDLP_PATH} not found in current directory")
+        print("Please download yt-dlp from https://github.com/yt-dlp/yt-dlp/releases")
         return False
     
     # Check for youtube-transcript-api if selected
@@ -65,11 +66,11 @@ def check_dependencies(use_whisper=False, transcript_source="yt-dlp"):
     
     # Check if Ollama is running
     try:
-        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        response = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=5)
         if response.status_code == 200:
             models = response.json().get("models", [])
-            if not any("gemma3:27b" in model.get("name", "") for model in models):
-                print("Warning: gemma3:27b model not found. Available models:")
+            if not any(config.OLLAMA_MODEL in model.get("name", "") for model in models):
+                print(f"Warning: {config.OLLAMA_MODEL} model not found. Available models:")
                 for model in models:
                     print(f"  - {model.get('name', 'Unknown')}")
                 return False
@@ -77,8 +78,8 @@ def check_dependencies(use_whisper=False, transcript_source="yt-dlp"):
             print("Error: Could not connect to Ollama API")
             return False
     except requests.exceptions.RequestException:
-        print("Error: Ollama is not running on localhost:11434")
-        print("Please start Ollama and ensure gemma3:27b model is installed")
+        print(f"Error: Ollama is not running on {config.OLLAMA_URL}")
+        print(f"Please start Ollama and ensure {config.OLLAMA_MODEL} model is installed")
         return False
     
     return True
@@ -94,7 +95,7 @@ def extract_transcript(youtube_url):
         try:
             # Run yt-dlp to extract transcript
             cmd = [
-                "./yt-dlp.exe",
+                config.YTDLP_PATH,
                 "--write-subs",
                 "--write-auto-subs",
                 "--sub-lang", "en",
@@ -136,7 +137,7 @@ def extract_transcript_alternative(youtube_url):
     try:
         print("Attempting alternative transcript extraction...")
         cmd = [
-            "./yt-dlp.exe",
+            config.YTDLP_PATH,
             "--write-info-json",
             "--write-subs",
             "--write-auto-subs",
@@ -176,7 +177,7 @@ def download_audio(youtube_url, output_dir="."):
     try:
         # Use yt-dlp to download audio only
         cmd = [
-            "./yt-dlp.exe",
+            config.YTDLP_PATH,
             "--extract-audio",
             "--audio-format", "wav",
             "--audio-quality", "0",  # Best quality
@@ -208,7 +209,7 @@ def download_audio(youtube_url, output_dir="."):
         print(f"Unexpected error downloading audio: {e}")
         return None
 
-def transcribe_with_whisper(audio_file, model_size="base"):
+def transcribe_with_whisper(audio_file, model_size=config.DEFAULT_WHISPER_MODEL):
     """Transcribe audio file using OpenAI Whisper"""
     try:
         import whisper
@@ -260,7 +261,7 @@ def extract_transcript_with_api(youtube_url):
         print(f"Error using YouTubeTranscriptApi: {e}")
         return None
 
-def get_transcript(youtube_url, transcript_source="yt-dlp", whisper_model="base", save_audio=False):
+def get_transcript(youtube_url, transcript_source="yt-dlp", whisper_model=config.DEFAULT_WHISPER_MODEL, save_audio=False):
     """Get transcript using the specified source"""
     
     if transcript_source == "api":
@@ -357,41 +358,31 @@ def summarize_chunk_with_ollama(chunk, running_summary="", chunk_number=1, total
     
     # Prepare the prompt based on whether this is the first chunk or not
     if running_summary:
-        prompt = f"""You are continuing to summarize a YouTube video transcript. Below is the summary so far and the next chunk of the transcript.
-
-PREVIOUS SUMMARY:
-{running_summary}
-
-CURRENT TRANSCRIPT CHUNK ({chunk_number} of {total_chunks}):
-{chunk}
-
-Please update and expand the summary by integrating the new information from this chunk. Maintain the same structure:
-1. Main topics discussed
-2. Key points and insights  
-3. Important conclusions or takeaways
-
-UPDATED SUMMARY:"""
+        prompt = config.PROMPT_CONTINUATION.format(
+            running_summary=running_summary,
+            chunk_number=chunk_number,
+            total_chunks=total_chunks,
+            chunk=chunk,
+            instructions=config.SUMMARY_INSTRUCTIONS
+        )
     else:
-        prompt = f"""Please provide a comprehensive summary of the following YouTube video transcript chunk (part {chunk_number} of {total_chunks}). Include:
-1. Main topics discussed
-2. Key points and insights
-3. Important conclusions or takeaways
-
-Transcript chunk:
-{chunk}
-
-Summary:"""
+        prompt = config.PROMPT_INITIAL.format(
+            chunk_number=chunk_number,
+            total_chunks=total_chunks,
+            chunk=chunk,
+            instructions=config.SUMMARY_INSTRUCTIONS
+        )
     
     # Prepare API request
-    api_url = "http://localhost:11434/api/generate"
+    api_url = f"{config.OLLAMA_URL}/api/generate"
     payload = {
-        "model": "gemma3:27b",
+        "model": config.OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False
     }
     
     try:
-        response = requests.post(api_url, json=payload, timeout=300)  # 5 minute timeout
+        response = requests.post(api_url, json=payload, timeout=config.OLLAMA_TIMEOUT)
         
         if response.status_code == 200:
             result = response.json()
@@ -408,7 +399,7 @@ Summary:"""
         print(f"Error connecting to Ollama: {e}")
         return None
 
-def summarize_with_ollama(transcript, chunk_size=80000):
+def summarize_with_ollama(transcript, chunk_size=config.DEFAULT_CHUNK_SIZE):
     """Summarize transcript using Ollama API with chunking support"""
     if len(transcript) <= chunk_size:
         # Single chunk processing
@@ -446,16 +437,16 @@ def main():
     parser.add_argument('url', nargs='?', help='YouTube URL to process')
     parser.add_argument('--save-transcript', action='store_true', 
                         help='Save the extracted transcript to a text file')
-    parser.add_argument('--chunk-size', type=int, default=80000,
-                        help='Maximum characters per chunk (default: 80000)')
-    parser.add_argument('--transcript-source', type=str, default='yt-dlp',
-                        choices=['yt-dlp', 'whisper', 'api'],
-                        help='Source for transcript extraction (default: yt-dlp)')
+    parser.add_argument('--chunk-size', type=int, default=config.DEFAULT_CHUNK_SIZE,
+                        help=f'Maximum characters per chunk (default: {config.DEFAULT_CHUNK_SIZE})')
+    parser.add_argument('--transcript-source', type=str, default='api',
+                        choices=config.TRANSCRIPT_SOURCES,
+                        help='Source for transcript extraction (default: api)')
     parser.add_argument('--use-whisper', action='store_true',
                         help='(DEPRECATED) Use --transcript-source=whisper instead.')
-    parser.add_argument('--whisper-model', type=str, default='turbo',
+    parser.add_argument('--whisper-model', type=str, default=config.DEFAULT_WHISPER_MODEL,
                         choices=['tiny', 'base', 'small', 'medium', 'large', 'turbo'],
-                        help='Whisper model size (default: base). Larger models are more accurate but slower.')
+                        help=f'Whisper model size (default: {config.DEFAULT_WHISPER_MODEL}). Larger models are more accurate but slower.')
     parser.add_argument('--save-audio', action='store_true',
                         help='Save the downloaded audio file (only when using --use-whisper)')
     
