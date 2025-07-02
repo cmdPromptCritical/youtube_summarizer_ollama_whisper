@@ -35,7 +35,7 @@ import os
 import tempfile
 import argparse
 from pathlib import Path
-import config
+import config_sermon as config
 
 def check_dependencies(use_whisper=False, transcript_source="yt-dlp", ollama_model=config.OLLAMA_MODEL):
     """Check if required dependencies are available"""
